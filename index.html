@@ -3271,24 +3271,29 @@
       return /^apotek\b/i.test(clean) ? clean : `Apotek ${clean}`;
     }
 
+    // Deteksi ID Apotek dari URL (?toko=nama-apotek), default: 'apotek-utama'
+    const urlParams = new URLSearchParams(window.location.search);
+    const rawTenant = (urlParams.get('toko') || 'apotek-utama').trim().toLowerCase();
+    const TENANT_ID = rawTenant.replace(/[^a-z0-9_-]/g, '_') || 'apotek-utama';
+
     const STORAGE_KEYS = {
-      SETTINGS: 'apotekkita_settings_v1',
-      USERS: 'apotekkita_users_v1',
-      SESSION: 'apotekkita_session_v1',
-      INVENTORY: 'apotekkita_inventory_v1',
-      MASTER_ITEMS: 'apotekkita_master_items_v1',
-      ORDERS: 'apotekkita_orders_v1',
-      RECEIPTS: 'apotekkita_receipts_v1',
-      TRANSACTIONS: 'apotekkita_transactions_v1',
-      SUPPLIERS: 'apotekkita_suppliers_v1',
-      STOCK_CARDS: 'apotekkita_stock_cards_v1',
-      LOANS: 'apotekkita_pharmacy_loans_v1',
-      RETURNS: 'apotekkita_returns_v1',
-      PAYABLES: 'apotekkita_payables_v1',
-      OPEX: 'apotekkita_opex_v1',
-      OPEX_RECURRING: 'apotekkita_opex_recurring_v1',
-      CASHIER_CLOSINGS: 'apotekkita_cashier_closings_v1',
-      OPNAME_AGENDAS: 'apotekkita_opname_agendas_v1'
+      SETTINGS: `${TENANT_ID}__apotekkita_settings_v1`,
+      USERS: `${TENANT_ID}__apotekkita_users_v1`,
+      SESSION: `${TENANT_ID}__apotekkita_session_v1`,
+      INVENTORY: `${TENANT_ID}__apotekkita_inventory_v1`,
+      MASTER_ITEMS: `${TENANT_ID}__apotekkita_master_items_v1`,
+      ORDERS: `${TENANT_ID}__apotekkita_orders_v1`,
+      RECEIPTS: `${TENANT_ID}__apotekkita_receipts_v1`,
+      TRANSACTIONS: `${TENANT_ID}__apotekkita_transactions_v1`,
+      SUPPLIERS: `${TENANT_ID}__apotekkita_suppliers_v1`,
+      STOCK_CARDS: `${TENANT_ID}__apotekkita_stock_cards_v1`,
+      LOANS: `${TENANT_ID}__apotekkita_pharmacy_loans_v1`,
+      RETURNS: `${TENANT_ID}__apotekkita_returns_v1`,
+      PAYABLES: `${TENANT_ID}__apotekkita_payables_v1`,
+      OPEX: `${TENANT_ID}__apotekkita_opex_v1`,
+      OPEX_RECURRING: `${TENANT_ID}__apotekkita_opex_recurring_v1`,
+      CASHIER_CLOSINGS: `${TENANT_ID}__apotekkita_cashier_closings_v1`,
+      OPNAME_AGENDAS: `${TENANT_ID}__apotekkita_opname_agendas_v1`
     };
 
     const ALL_PERMISSIONS = [
@@ -13042,7 +13047,7 @@ Status SP akan ditutup menjadi "Diterima Lengkap" dan sisa barang tidak lagi men
     }
   });
 </script>
-<!-- ==================== KONEKSI REAL-TIME FIREBASE (APOTEK HENNY) ==================== -->
+<!-- ==================== KONEKSI REAL-TIME FIREBASE (MULTI-APOTEK) ==================== -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-app.js";
   import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/13.4.0/firebase-database.js";
@@ -13061,6 +13066,9 @@ Status SP akan ditutup menjadi "Diterima Lengkap" dan sisa barang tidak lagi men
   const app = initializeApp(firebaseConfig);
   const cloudDb = getDatabase(app);
   let isSyncingFromCloud = false;
+
+  // Jalur database otomatis terpisah untuk setiap ID apotek
+  const CLOUD_BASE_PATH = `tenants/${TENANT_ID}/apotek_json`;
 
   const SYNCED_KEYS = [
     STORAGE_KEYS.SETTINGS,
@@ -13081,14 +13089,13 @@ Status SP akan ditutup menjadi "Diterima Lengkap" dan sisa barang tidak lagi men
     STORAGE_KEYS.OPNAME_AGENDAS
   ];
 
-  // Timpa fungsi saveState secara otomatis tanpa perlu menghapus kode lama
   const originalSaveState = window.saveState;
   window.saveState = function (key, value) {
     try {
       const jsonStr = JSON.stringify(value);
       localStorage.setItem(key, jsonStr);
       if (!isSyncingFromCloud && SYNCED_KEYS.includes(key)) {
-        set(ref(cloudDb, 'apotek_json/' + key), jsonStr).catch(err => {
+        set(ref(cloudDb, `${CLOUD_BASE_PATH}/${key}`), jsonStr).catch(err => {
           console.error('Gagal sinkron ke cloud:', err);
         });
       }
@@ -13098,14 +13105,12 @@ Status SP akan ditutup menjadi "Diterima Lengkap" dan sisa barang tidak lagi men
     }
   };
 
-  // Sinkronisasi Real-Time antar semua perangkat
-  onValue(ref(cloudDb, 'apotek_json'), (snapshot) => {
+  onValue(ref(cloudDb, CLOUD_BASE_PATH), (snapshot) => {
     const data = snapshot.val();
     if (!data) {
-      // Unggah data awal jika database cloud masih kosong
       SYNCED_KEYS.forEach(k => {
         const localStr = localStorage.getItem(k);
-        if (localStr) set(ref(cloudDb, 'apotek_json/' + k), localStr);
+        if (localStr) set(ref(cloudDb, `${CLOUD_BASE_PATH}/${k}`), localStr);
       });
       return;
     }
@@ -13138,9 +13143,10 @@ Status SP akan ditutup menjadi "Diterima Lengkap" dan sisa barang tidak lagi men
       const vClose = parseSafe(STORAGE_KEYS.CASHIER_CLOSINGS); if (Array.isArray(vClose)) cashierClosings = vClose;
       const vOpname = parseSafe(STORAGE_KEYS.OPNAME_AGENDAS); if (Array.isArray(vOpname)) opnameAgendas = vOpname;
 
-      if (adaPerubahan && currentUser) {
+      // Terapkan branding segera (termasuk di halaman Login sebelum masuk)
+      if (adaPerubahan) {
         applyBranding();
-        refreshAllViews();
+        if (currentUser) refreshAllViews();
       }
     } catch (e) {
       console.error('Gagal membaca data cloud:', e);
